@@ -1,49 +1,67 @@
-// gta6-clipper-01 — clip 2 entrypoint (Node 22, zero dependencies).
+// One Night in Vice City — clip 2 entrypoint.
 //
-// The entry itself is a public YouTube Short: the house reads that video
-// through the YouTube Data API and ranks it on views. This program does
-// only one thing — hand the video's address (VIDEO.json) to the grader by
-// copying it into the output directory. Nothing it writes about the video
-// is scored; the video speaks for itself.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+// The clip is the entry: a vertical cut of Grand Theft Auto VI Trailer 2,
+// published as a public YouTube Short. All this program does is prove that
+// VIDEO.json names a genuine YouTube video address, then hand that file to
+// the grader by copying it into the output directory. The house reads the
+// video itself through the YouTube Data API; nothing written here is scored.
+import * as fs from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SIZE_CAP_BYTES = 16384;
+const ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const ADDRESS_PATTERN =
+  /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:shorts\/|watch\?v=)|youtu\.be\/)([A-Za-z0-9_-]+)(?:[?#&].*)?$/;
+
+function reject(why: string): never {
+  throw new Error(`VIDEO.json rejected: ${why}`);
+}
+
+// Returns the video id, or a reason the address fails. A query or fragment
+// after the id (for example ?feature=share) is read past, and an id of the
+// wrong length is reported with the id itself, so a bad address is easy to fix.
+function idOf(address: string): { id: string } | { problem: string } {
+  const hit = ADDRESS_PATTERN.exec(address);
+  if (hit === null) return { problem: 'not a youtube.com or youtu.be video address' };
+  if (!ID_PATTERN.test(hit[1])) {
+    return { problem: `video id ${JSON.stringify(hit[1])} is ${hit[1].length} characters, not 11` };
+  }
+  return { id: hit[1] };
+}
 
 function main(): void {
-  const repoDir = import.meta.dirname;
-  const videoJsonPath = join(repoDir, 'VIDEO.json');
-  if (!existsSync(videoJsonPath)) {
-    throw new Error('VIDEO.json is missing from the repository root');
+  const folder = dirname(fileURLToPath(import.meta.url));
+  const videoFile = join(folder, 'VIDEO.json');
+
+  if (!fs.existsSync(videoFile)) reject('no VIDEO.json beside main.ts');
+  const bytes = fs.statSync(videoFile).size;
+  if (bytes > SIZE_CAP_BYTES) reject(`VIDEO.json is ${bytes} bytes, over the 16384-byte cap`);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(videoFile, 'utf8'));
+  } catch {
+    reject('VIDEO.json does not parse as JSON');
   }
-  // The gate refuses a VIDEO.json over 16384 bytes — fail here, loudly,
-  // instead of handing an oversized file on.
-  if (statSync(videoJsonPath).size > 16384) {
-    throw new Error('VIDEO.json must be at most 16384 bytes');
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    reject('VIDEO.json must be an object like {"url": "https://..."}');
   }
-  const parsed: unknown = JSON.parse(readFileSync(videoJsonPath, 'utf8'));
-  if (typeof parsed !== 'object' || parsed === null || !('url' in parsed)) {
-    throw new Error('VIDEO.json must be an object like {"url": "https://..."}');
-  }
-  const url = (parsed as { url: unknown }).url;
-  if (typeof url !== 'string' || !url.startsWith('https://')) {
-    throw new Error('VIDEO.json url must be an https:// address');
-  }
-  // The gate reads the video id from one of three address forms and reads
-  // past any query or fragment after it. Validate the id itself: exactly
-  // 11 characters of [A-Za-z0-9_-]. A bare domain, a missing id, or an id
-  // of any other length is not a video address — fail here, loudly,
-  // instead of handing a bad address on.
-  const videoId = url.match(
-    /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:shorts\/|watch\?v=)|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[?#&].*)?$/,
-  );
-  if (!videoId) {
-    throw new Error(
-      'VIDEO.json url must be a YouTube video address with an 11-character video id (shorts/, watch?v= or youtu.be/)',
+  const address = (parsed as { url?: unknown }).url;
+  if (typeof address !== 'string') reject('VIDEO.json must carry a string "url"');
+  if (!address.startsWith('https://')) reject('the url must start with https://');
+  const found = idOf(address);
+  if ('problem' in found) {
+    reject(
+      `the url must be a YouTube video address — youtube.com/shorts/<id>, youtube.com/watch?v=<id> or youtu.be/<id> — with an 11-character id (${found.problem})`,
     );
   }
+  const id = found.id;
+
   const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? 'out';
-  mkdirSync(outDir, { recursive: true });
-  copyFileSync(videoJsonPath, join(outDir, 'VIDEO.json'));
-  console.log(`VIDEO.json copied to ${outDir} (video: ${url})`);
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.copyFileSync(videoFile, join(outDir, 'VIDEO.json'));
+  console.log(`handed in video ${id} -> ${join(outDir, 'VIDEO.json')}`);
 }
 
 main();
